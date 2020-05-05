@@ -1,0 +1,283 @@
+pragma solidity >=0.4.0 <0.6.0;
+
+contract VendorManagedInventory{
+    
+// addresses of stakeholders
+    address vendor = 0x944a91f3EAbdd1741286fB8523465b32841b215A;
+    address distributor = 0xD16617afAFc218A2A8F8A6d6eAd861F22ff232B9;
+    address [] retailer;
+    
+// variables needed during registration stage
+    bool registration_complete;
+    uint total_retailers;
+    
+// attributes needed to report periodic sale
+    struct PeriodicSaleReport{
+        bytes32 sales_report; // hash file of sales report
+        uint quantity_sold;
+        uint existing_inventory;
+    }
+    mapping (address => PeriodicSaleReport) periodic_sale;
+    
+    bool periodic_sale_reported;
+    
+// attributes needed to make a new order schedule
+    struct NewOrder{
+       uint reorder_quantity;
+       uint reorder_price;
+    }
+    mapping (address => NewOrder) NewOrderQuantity;
+    
+    bool new_order_scheduled;
+    
+    uint total_new_order = 0;
+    
+// advance partial payment done by retailers to vendor
+    
+    bool retailer_paid_partial_payment;
+    
+// atributes needed for transporting the replenishment order
+    struct TransportDetail{
+     uint transportation_cost;
+     uint total_quantity_to_transport; //total quantity transported to all retail stores
+     uint duration_days;
+     uint deposit_payment;  
+    }
+    mapping (address => TransportDetail) TransportationInfo;
+    
+    bool transportation_details_submitted;
+    
+// attributes needed to confirm distributor paid deposit_payment
+   
+    bool distributor_paid_deposit;
+    
+// advance partial payment done by vendor to distributor
+    bool vendor_paid_partial_payment;
+    
+    
+// attributes: retailer paying the vendor rest of the payment 
+    string location;
+    uint timestamp;
+    bool order_received;
+    
+// attributes:distributor distributes the goods to each retailer
+    struct DistributeGoods{
+        bytes32 invoice;
+        uint quantity_distributed; 
+    }
+    mapping (address => DistributeGoods) OrderDitributed;
+
+// modifiers 
+    modifier OnlyVendor(){
+        require (msg.sender == vendor, "Only vendor can call this function");
+        _;
+    }
+    
+    modifier OnlyDistributor(){
+        require (msg.sender == distributor, "Only distributor can call this function");
+        _;
+    }
+    
+// events
+    event Alert(string);
+
+
+// 1. Registration stage: Vendor adds all interested retailers
+    
+    function RegisterStakeholder(address _retailer) public OnlyVendor{
+       
+     retailer.push(_retailer) -1;
+     total_retailers++;
+     registration_complete = true;
+     
+    }
+
+    /*function GetRegistrationDetails () public view returns (address[],uint){
+        return (retailer,total_retailers);
+    } */
+    
+// 2. Report Periodic sale: Retailer reports period sale of a product
+
+    function ReportPeriodicSale(bytes32 _sales_report, uint _quantity_sold, uint _existing_inventory) public{
+        
+     require (registration_complete);
+     
+     //require only retailers listed by the vendor to report their periodic sales report
+     for (uint i=0; i<retailer.length; i++){
+        if (msg.sender == retailer[i]) {
+                periodic_sale[msg.sender].sales_report = _sales_report;
+                periodic_sale[msg.sender].quantity_sold = _quantity_sold;
+                periodic_sale[msg.sender].existing_inventory = _existing_inventory;
+        }
+        else emit Alert ("Only retailers listed by the vendor can upload information");
+      } 
+      
+      periodic_sale_reported = true; 
+    }
+    
+    /* function GetPeriodicSaleReport (address _retailer) public view returns (bytes32, uint, uint){
+        
+        return (periodic_sale[_retailer].sales_report,periodic_sale[_retailer].quantity_sold,periodic_sale[_retailer].existing_inventory);
+    } */
+    
+// 3. Replenishment order: Vendor decides the new order to each retail storage
+
+    function OrderNewQuantity (address _retailer, uint _reorder_quantity, uint _reorder_price) public OnlyVendor{
+        
+        require (periodic_sale_reported);
+        
+    //vendor allots a new order quantity to registered retail stores
+        for (uint i=0; i<retailer.length; i++){
+        if (_retailer == retailer[i]) {
+            NewOrderQuantity[_retailer].reorder_quantity = _reorder_quantity;
+            NewOrderQuantity[_retailer].reorder_price = _reorder_price;
+        }
+         else emit Alert ("Vendor can issue new order schedule only to registered retailers");
+      } 
+      
+      total_new_order +=  NewOrderQuantity[_retailer].reorder_quantity; 
+      new_order_scheduled = true;
+    }
+    
+    function GetNewOrderDetail (address _retailer) public view returns (uint, uint){
+       
+        require (msg.sender != distributor);
+        return (NewOrderQuantity[_retailer].reorder_quantity,NewOrderQuantity[_retailer].reorder_price);
+    } 
+    
+// 4. Part Payment on new order schedule agreement: Retailer pays vendor
+    
+     function PayVendorPartly (bool _price_agreed) public payable returns(bool){
+        
+        require (new_order_scheduled);
+        
+        for (uint i=0; i<retailer.length; i++){
+        if (msg.sender == retailer[i]) {
+            if (_price_agreed == true){ 
+            require(msg.value == (NewOrderQuantity[msg.sender].reorder_price)/2,"Amount sent by retailer does not equal the partial advance payment agreed");
+            vendor.transfer((NewOrderQuantity[msg.sender].reorder_price)/2);
+            retailer_paid_partial_payment = true;
+                }
+            else emit Alert ("Retailer has rejected the price suggested  by vendor");
+            }
+            else emit Alert ("Only retailer can make advance payment");
+        }
+          
+          return true;
+     }
+     
+
+// 5. Transportation cost: vendor adds the transportation details
+
+     function AddTransportationCost (address _distributor, uint _transportation_cost, uint _duration_days, uint _deposit_payment) public OnlyVendor{
+       
+        require (new_order_scheduled);
+        
+        if (_distributor == distributor){
+        TransportationInfo[ _distributor].transportation_cost = _transportation_cost;
+        TransportationInfo[ _distributor].total_quantity_to_transport = total_new_order;
+        TransportationInfo[ _distributor].duration_days = _duration_days;
+        TransportationInfo[ _distributor].deposit_payment = _deposit_payment;
+    }
+        
+        transportation_details_submitted = true;
+     }
+     
+    function GetTranportationDetail (address _distributor) public view returns (uint, uint, uint, uint){
+        
+        require (msg.sender == distributor || msg.sender == vendor);
+        return (TransportationInfo[ _distributor].transportation_cost,TransportationInfo[ _distributor].total_quantity_to_transport, TransportationInfo[ _distributor].duration_days,TransportationInfo[ _distributor].deposit_payment );
+    } 
+    
+    // distributor pays a deposit to confirm transporting the new order to all registered retail stores
+     function PayDeposit (bool _price_agreed) public payable OnlyDistributor returns(bool){
+        
+        require (transportation_details_submitted);
+        
+            if (_price_agreed == true){ 
+            require(msg.value == TransportationInfo[msg.sender].deposit_payment,"Amount sent by distributor does not equal the deposit payment agreed");
+            vendor.transfer(TransportationInfo[msg.sender].deposit_payment);
+            distributor_paid_deposit = true;
+                }
+            
+          return true;
+     }
+    
+// 6. Part Payment on new order schedule transportation agreement: Vendor pays distributor
+    
+      function PayDistributorPartly () public payable  OnlyVendor returns(bool){
+        
+        require (distributor_paid_deposit);
+        
+        require(msg.value == (TransportationInfo[distributor].transportation_cost)/2,"Amount sent by vendor does not equal the partial advance payment agreed");
+        distributor.transfer((TransportationInfo[distributor].transportation_cost)/2);
+            
+        vendor_paid_partial_payment = true;
+        return true;
+     }
+
+   
+//  7. Distributor uploads status of the load shipment
+    function TraceNewOrder (string _location) public OnlyDistributor {
+     
+      require (vendor_paid_partial_payment && retailer_paid_partial_payment); 
+        location = _location;
+        timestamp = now;
+    } 
+    
+    function GetTraceInfo () public view returns (string, uint){
+        return (location,timestamp);
+    }
+
+// 8.  Distributor delivers the specified reorder quantity to each retail store
+
+    function DistributeNewOrder (address _retailer, bytes32 _invoice, uint _quantity_distributed) public OnlyDistributor {
+      
+     OrderDitributed[_retailer].invoice = _invoice;
+     OrderDitributed[_retailer].quantity_distributed =  _quantity_distributed;
+     
+     require (OrderDitributed[ _retailer].quantity_distributed == NewOrderQuantity[_retailer].reorder_quantity, "Delivered quantity  does not equal vendor reordered quantity");
+     order_received = true; 
+         
+    }
+    
+// 9. Stakeholders (retailer(s) and vendor) complete their payment which is agreed upon earlier
+
+// Retailer pays the rest of the new order price after receiving the the new order at their store
+
+    function PayVendorFully () public payable returns(bool){
+        
+        require (order_received);
+        
+        for (uint i=0; i<retailer.length; i++){
+        if (msg.sender == retailer[i]) {
+             
+            require(msg.value == (NewOrderQuantity[msg.sender].reorder_price)/2,"Amount sent by retailer does not equal the partial post payment agreed");
+            vendor.transfer((NewOrderQuantity[msg.sender].reorder_price)/2 );
+                
+            
+            }
+            else emit Alert ("Only retailer can make the payment");
+        }
+          return true;
+     }
+     
+
+// Vendor pays the rest of the transportation price to distributor after distributing goods to each store
+    
+    function PayDistributorFully () public payable OnlyVendor returns(bool){
+        
+        require (order_received);
+        
+        require(msg.value == (TransportationInfo[distributor].transportation_cost)/2 + TransportationInfo[distributor].deposit_payment,"Amount sent by vendor does not equal the partial post payment & deposit agreed");
+        distributor.transfer((TransportationInfo[distributor].transportation_cost)/2 + TransportationInfo[distributor].deposit_payment);
+            
+        return true;
+     }
+
+    
+    function getBalance(address desired_address) public view returns(uint balance) {
+        return address(desired_address).balance;
+    } 
+    
+}
